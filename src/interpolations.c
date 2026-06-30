@@ -554,6 +554,37 @@ static double interpolation_Chebyshev_Tn_YZ(Interpolation_T *const interp_s)
       
   return interp_v;
 }
+/* fill T[0..nx-1] with the "combined" Chebyshev basis values at x, i.e.
+// T[i] == T_cheb_combined(nx,i,x), but evaluated once via the Chebyshev
+// recurrence (T_0=1, T_1=x, T_i = 2x T_{i-1} - T_{i-2}) so the whole basis
+// costs O(nx) flops with NO acos/cos calls. The recurrence is exact at
+// x = +-1, matching Cheb_Tn's special cases. */
+static void fill_T_cheb_combined(double *const T, const Uint nx, const double x)
+{
+  if (nx == 0)
+    return;
+
+  double Ti   = 1.0;/* T_0 */
+  double Tim1 = 0.0;/* T_{-1}, unused for i = 0,1 */
+  for (Uint i = 0; i < nx; ++i)
+  {
+    if (i == 1)
+    {
+      Tim1 = Ti;/* T_0 */
+      Ti   = x; /* T_1 */
+    }
+    else if (i >= 2)
+    {
+      const double Tnext = 2.0*x*Ti - Tim1;/* T_i */
+      Tim1 = Ti;
+      Ti   = Tnext;
+    }
+    /* combined factor: 1 for the first and last index, else 2 (see
+    // T_cheb_combined). */
+    T[i] = (i == 0 || i == nx-1) ? Ti : 2.0*Ti;
+  }
+}
+
 /* interpolation in X&Y&Z directions.
 // ->return value: interpolation value.
 */
@@ -567,23 +598,30 @@ static double interpolation_Chebyshev_Tn_XYZ(Interpolation_T *const interp_s)
   const double *C = 0;/* coeffs of expansion of field in Tn */
   double interp_v = 0;
   Uint i,j,k;
-  
+
   make_coeffs_3d(field);
   C = field->v2;
-  
+
+  /* Precompute the 1D basis in each direction once (O(N) instead of the
+  // O(N^3) recomputation of Tz that happened inside the innermost loop). */
+  double TX[n[0]], TY[n[1]], TZ[n[2]];
+  fill_T_cheb_combined(TX,n[0],X);
+  fill_T_cheb_combined(TY,n[1],Y);
+  fill_T_cheb_combined(TZ,n[2],Z);
+
   for (i = 0; i < n[0]; ++i)
   {
-    double tx = Tx(i,X);
     for (j = 0; j < n[1]; ++j)
     {
-      double Tx_Ty = tx*Ty(j,Y);
+      const double Tx_Ty = TX[i]*TY[j];
+      const double *const Crow = C + i_j_k_to_ijk(n,i,j,0);/* contiguous in k */
+      double s = 0;
       for (k = 0; k < n[2]; ++k)
-      {
-        interp_v += C[i_j_k_to_ijk(n,i,j,k)]*Tx_Ty*Tz(k,Z);
-      }
+        s += Crow[k]*TZ[k];
+      interp_v += Tx_Ty*s;
     }
   }
-  
+
   return interp_v;
 }
 
