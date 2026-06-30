@@ -556,17 +556,35 @@ void idr_find_XYZ_from_xyz(Elliptica_ID_Reader_T *const idr,
   /* populating pnt->(X,Y,Z) and pnt->patchn */
   printf(Pretty0"Preparing points for the interpolation ...\n");
   fflush(stdout);
-  OpenMP_1d_Pragma(omp parallel for)
+  /* Point-location cache: the evolution code feeds points in contiguous order,
+  // so consecutive points almost always land in the same patch. Each thread
+  // remembers the last patch it located and probes that first, before falling
+  // back to the full x_in_which_patch() scan over all patches. */
+  Patch_T *last_patch = 0;
+  OpenMP_1d_Pragma(omp parallel for firstprivate(last_patch))
   for (Uint p = 0; p < npoints; ++p)
   {
     Patch_T *patch = 0;
     double x[3],X[3];
-    
+    int found = 0;
+
     x[0] = pnt->x[p] + CM[0];
     x[1] = pnt->y[p] + CM[1];
     x[2] = pnt->z[p] + CM[2];
-    patch = x_in_which_patch(x,grid->patch,grid->np);
-    if (patch && X_of_x(X,x,patch))
+    /* fast path: try this thread's last located patch first. */
+    if (last_patch && X_of_x(X,x,last_patch))
+    {
+      patch = last_patch;
+      found = 1;
+    }
+    /* slow path: scan all patches, then cache the winner. */
+    else if ((patch = x_in_which_patch(x,grid->patch,grid->np)) &&
+             X_of_x(X,x,patch))
+    {
+      last_patch = patch;
+      found = 1;
+    }
+    if (found)
     {
       pnt->X[p]      = X[0];
       pnt->Y[p]      = X[1];
